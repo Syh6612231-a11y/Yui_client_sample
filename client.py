@@ -1,4 +1,7 @@
 import socket
+
+from sympy import false
+
 import voice2text
 import torch
 from pathlib import Path
@@ -16,7 +19,7 @@ def main():
     text=""
     input_mode = 2 # 切换输入模式
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    home_status = actions.HomeStatus()
+    home_status = actions.HomeStatus() # 初始化状态机
     # ===== 加载 Qwen3-ASR 模型 =====
     print("正在加载 Qwen3-ASR 模型...")
     model_dir = Path("voice2text/Qwen3-ASR-1___7B")
@@ -31,7 +34,33 @@ def main():
         client_socket.connect((HOST, PORT))
         print(f"[客户端] 已连接到 {HOST}:{PORT}")
         print("输入消息发送给服务器，输入 quit 断开连接。")
-
+        # 登录
+        login = false
+        while not login:
+            print("请问是要登录还是注册：（1.登录，2.注册）")
+            num = input()
+            print("请输入用户名：")
+            username = input()
+            print("请输入密码：")
+            password = input()
+            if num == "1":
+                client_socket.sendall("login$".encode("utf-8"))
+                client_socket.sendall((username + "$").encode("utf-8"))
+                client_socket.sendall((password + "$").encode("utf-8"))
+                client_socket.sendall("1$".encode("utf-8"))
+                recv_buf = b""
+                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                if result == "login_success":
+                    login = True
+                    print("登录成功")
+            elif num == "2":
+                client_socket.sendall("setup$".encode("utf-8"))
+                client_socket.sendall((username + "$").encode("utf-8"))
+                client_socket.sendall((password + "$").encode("utf-8"))
+                recv_buf = b""
+                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                if result == "setup_success":
+                    print("账号创建成功")
         while True:
             if input_mode == 1:
                 text = input("请输入: ")   # 读取键盘输入
@@ -42,6 +71,7 @@ def main():
                 text = voice2text.v2t(asr_model)
             if text == "团子拜拜":
                 client_socket.sendall("6.18$".encode("utf-8"))
+                client_socket.sendall((home_status.to_prompt() + "$").encode("utf-8"))
                 print("[客户端] 已发送断开请求")
                 break
             print(f"玉舟哥哥说：{text}")
