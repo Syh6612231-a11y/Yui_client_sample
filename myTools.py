@@ -1,5 +1,6 @@
 # 入 Python 的正则表达式模块 re，后面要用 re.match() 判断"某个字是不是中文汉字"。
 import re
+from typing import Tuple
 # 按照标点符号拆分中文语段
 def split_by_chinese(text, limit=15):
     # 创建空列表用来保存每一段切片
@@ -28,13 +29,16 @@ def split_by_chinese(text, limit=15):
     if buf:
         segments.append(buf)
     return segments
-def get_a_message(client_socket,recv_buf):
+class ClientDisconnected(Exception):
+    # 异常里什么都不用写，把处理都放在高层函数里
+    pass
+def get_a_message(client_socket,recv_buf)-> Tuple[str, bytes]:
     # 循环接收直到拿到一行完整回复
     while b"$" not in recv_buf:
         chunk = client_socket.recv(2048)
         if not chunk:
             print("[客户端] 服务端已断开连接")
-            return
+            raise ClientDisconnected()
         recv_buf += chunk
     line, recv_buf = recv_buf.split(b"$", 1)
     return line.decode("utf-8"), recv_buf
