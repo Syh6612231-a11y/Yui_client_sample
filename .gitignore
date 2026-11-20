@@ -1,4 +1,4 @@
 voice2text/
 __pycache__/
-.runtime/
-.acl-recovery/
+GPT-SoVITS-v2pro-20250604-nvidia50/
+user_data/

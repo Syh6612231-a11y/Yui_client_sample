@@ -6,31 +6,47 @@ import threading
 import requests
 import numpy as np
 import sounddevice as sd
+import random
 
 
 # ========== 1. 请求 TTS，返回 WAV bytes ==========
-def text2voice(text,sentiment_label,sentiment_confidence):
-    url = "http://127.0.0.1:9880/tts"
+def text2voice(character_name, character_path,text,sentiment_label,sentiment_confidence):
+    url = "http://127.0.0.1:9880"
+    # 1. 先指定要使用的 GPT 和 SoVITS 模型路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    print(current_dir)
+    gpt_sovits_base_path = current_dir+"/GPT-SoVITS-v2pro-20250604-nvidia50"
+    gpt_weights_path = gpt_sovits_base_path+"/GPT_weights_v2/"+character_name+".ckpt"
+    sovits_weights_path = gpt_sovits_base_path+"/SoVITS_weights_v2/"+character_name+".pth"
+    # 热切换 GPT 模型
+    requests.get(f"{url}/set_gpt_weights", params={"weights_path": gpt_weights_path})
+    # 热切换 SoVITS 模型
+    requests.get(f"{url}/set_sovits_weights", params={"weights_path": sovits_weights_path})
     if float(sentiment_confidence)<0.4:
         sentiment_level = "low"
     elif 0.4 <= float(sentiment_confidence) < 0.6:
         sentiment_level = "middle"
     else:
         sentiment_level = "high"
-    with open("refVoice/"+sentiment_label+"/"+sentiment_label+"_"+sentiment_level+".txt", "r", encoding="utf-8") as f:
+    character_ref_voice_path = character_path+"/refVoice/"+sentiment_label+"/"+sentiment_label+"_"+sentiment_level+"/voice"
+    character_ref_voice_text_path = character_path+"/refVoice/"+sentiment_label+"/"+sentiment_label+"_"+sentiment_level+"/text"
+    ref_voice_list = os.listdir(character_ref_voice_path) # 获取参考音频的名称并保存到列表里面，后续使用len()函数就可以知道有多少个参考音频了
+    random_num = random.randint(1, len(ref_voice_list))
+    ref_audio_path = (current_dir+
+                      "/"+character_ref_voice_path+
+                      "/"+sentiment_label+"_"+sentiment_level+"_"+str(random_num)+".wav")
+    with open(character_ref_voice_text_path+"/"+sentiment_label+"_"+sentiment_level+"_"+str(random_num)+".txt", "r", encoding="utf-8") as f:
         prompt_text = f.read().strip()  # strip() 去掉首尾空白/换行
     """API里必须填绝对地址"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    print(current_dir)
-    ref_audio_path = current_dir+"/refVoice/"+sentiment_label+"/"+sentiment_label+"_"+sentiment_level+".wav"
+
     params = {
         "text": text,
         "text_lang": "zh",
         "ref_audio_path": ref_audio_path,
-        "prompt_lang": "ja",
+        "prompt_lang": "zh",
         "prompt_text": prompt_text,
     }
-    r = requests.get(url, params=params, timeout=60)
+    r = requests.get(f"{url}/tts", params=params, timeout=60)
     r.raise_for_status()
     return r.content   # 这里返回的是二进制的WAV格式
 
@@ -124,9 +140,8 @@ def _playback_worker(samplerate, channels, block_ms=50):
             except queue.Empty:
                 stream.write(silence)   # 没数据就写静音，流保持开启
 
-
 # ========== 5. 主入口：切片 → 流式连续播放 ==========
-def segments2voice(segments,sentiment_label,sentiment_confidence):
+def segments2voice(character_name,character_path, segments, sentiment_label, sentiment_confidence):
     """
     把所有切片音频写入同一个持续打开的音频流，
     段与段之间无开关延迟，听感像一整段话。
@@ -156,7 +171,7 @@ def segments2voice(segments,sentiment_label,sentiment_confidence):
 
     # ---- 先请求第一段，用于确定采样率和声道数 ----
     try:
-        first_bytes = text2voice(segments[0],sentiment_label,sentiment_confidence)
+        first_bytes = text2voice(character_name,character_path,segments[0],sentiment_label,sentiment_confidence)
         first_audio, samplerate, channels = _wav_bytes_to_numpy(first_bytes)
         print(f"[1/{total}] 播放：{segments[0]}")
     except Exception as e:
@@ -183,7 +198,7 @@ def segments2voice(segments,sentiment_label,sentiment_confidence):
             if _stop_flag.is_set():
                 break
             try:
-                audio_bytes = text2voice(seg,sentiment_label,sentiment_confidence)
+                audio_bytes = text2voice(character_name, character_path, seg,sentiment_label, sentiment_confidence)
                 arr, sr, ch = _wav_bytes_to_numpy(audio_bytes)
                 if sr != samplerate:
                     print(f"警告：第 {idx} 段采样率 {sr} != {samplerate}，可能变调")

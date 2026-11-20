@@ -29,6 +29,8 @@ def main():
         device_map="cuda:0",
         max_new_tokens=512,
     )
+    user_path = "user_data"
+    local_user_list = [p.name for p in Path(user_path).iterdir() if p.is_dir()]
     print("模型加载完成！")
     try:
         """开始运行的时候就先建立连接"""
@@ -47,6 +49,11 @@ def main():
             num = input()
             print("请输入用户名：")
             username = input()
+            if username in local_user_list:
+                print("本地数据当中有该用户")
+            else:
+                print("本地数据当中不存在该用户，当前无法从服务器当中获取本地需要存放的数据，请手动添加对应文件后再登录")
+                continue
             print("请输入密码：")
             password = input()
             print("请输入角色名：")
@@ -61,6 +68,121 @@ def main():
                 if result == "login_success":
                     login = True
                     print("登录成功")
+                    character_path = user_path + "/" + username + "/" + character_name
+                    recv_buf = b""
+                    memory_management_is_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                    if memory_management_is_success == "memory_management_unsuccess":
+                        print("记忆管理失败，服务器端的是否请求和聊天记录的条数对不上")
+                        # 服务器那边已经关闭了连接，这里直接return就可以了,return之后也会执行最外层的finally来关闭连接
+                        return
+                    """**********************************************************************************************************"""
+                    """从这里开始是登录成功之后可以执行的所有逻辑，都写入一个大的while循环"""
+                    """整个部分的主要逻辑如下"""
+                    """1.先判断用户要做什么操作（req）"""
+                    """2.根据该操作向用户获取所需的信息，有一些发给服务器，有一些保存到客户端本地"""
+                    """3.接收服务器反馈并做相应处理"""
+                    """4.如果是连接断开就直接关闭客户端"""
+                    try:
+                        while True:
+                            print("请输入需要向服务器发送的请求：（1.chat 3.change_character 5.back2login [输入quit]）添加和删除目前只能手动操作")
+                            req = input()
+                            if req == "1":
+                                if input_mode == 1:
+                                    text = input("请输入: ")  # 读取键盘输入
+                                    if text == "":
+                                        print("text为空")
+                                        continue
+                                elif input_mode == 2:
+                                    print("正在努力倾听您的话：")
+                                    text = voice2text.v2t(asr_model)
+                                print(f"玉舟哥哥说：{text}")
+                                # 发送文本，必须以 $ 结尾
+                                client_socket.sendall("chat$".encode("utf-8"))
+                                client_socket.sendall((text + "$").encode("utf-8"))
+                                client_socket.sendall((home_status.to_prompt() + "$").encode("utf-8"))
+                                # recv_buf必须定义在外层，不然会丢失信息
+                                recv_buf = b""
+                                reply, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                control_code_str, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                # 0: "sadness", 1: "happiness", 2: "like", 3: "anger", 4: "fear", 5: "surprise", 6: "disgust"
+                                sentiment_label, recv_buf = myTools.get_a_message(client_socket, recv_buf)  # 接收情感标签
+                                sentiment_confidence, recv_buf = myTools.get_a_message(client_socket,recv_buf)  # 接收情感标签可信度（这是一个浮点数，需要做类型转换）
+                                print(f"由比滨结衣：{reply}")
+                                print(f"控制代码：{control_code_str}")
+                                print(f"情感标签：{sentiment_label}")
+                                print(f"情感可信度{sentiment_confidence}")
+                                if control_code_str != "":
+                                    for ch in control_code_str:
+                                        code = int(ch)
+                                        actions.do_action(home_status, code)
+                                    print(home_status.to_prompt())
+                                # ---------- 调用语音生成 ----------
+                                segments = myTools.split_by_chinese(reply, limit=12)
+                                TTS.segments2voice(character_name, character_path, segments, "happiness", sentiment_confidence)
+                                """目前，创建角色、切换角色以及删除角色都仅完成了服务器端的开发，客户端还需要开发对应的切换,例如：语音模型"""
+                            elif req == "add":
+                                print("请输入角色姓名：")
+                                new_character_name = input()
+                                print("请输入角色设定")
+                                character_set = input()
+                                client_socket.sendall("create_a_new_character$".encode("utf-8"))
+                                client_socket.sendall((new_character_name + "$").encode("utf-8"))
+                                client_socket.sendall((character_set + "$").encode("utf-8"))
+                                recv_buf = b""
+                                create_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                if create_success == "create_success":
+                                    print(f"新角色{new_character_name}创建成功")
+                                    # 这里需要补充客户端的处理
+                                elif create_success == "create_unsuccess":
+                                    print(f"新角色{new_character_name}创建失败")
+                            elif req == "3":
+                                print("请输入需要切换的角色名称：")
+                                change_name = input()
+                                if change_name == character_name:
+                                    print("无法切换为当前角色")
+                                    continue
+                                client_socket.sendall("change_character$".encode("utf-8"))
+                                client_socket.sendall((change_name + "$").encode("utf-8"))
+                                recv_buf = b""
+                                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                if result == "change_success":
+                                    print("角色切换成功")
+                                    # 在这里写客户端的处理
+                                    character_name =change_name
+                                elif result == "change_unsuccess":
+                                    print("角色切换失败")
+                            elif req == "delete":
+                                print("删除角色")
+                                deletet_name = input()
+                                client_socket.sendall("delete_character$".encode("utf-8"))
+                                client_socket.sendall((deletet_name + "$").encode("utf-8"))
+                                recv_buf = b""
+                                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                if result == "delete_success":
+                                    print("角色删除成功")
+                                    # 客户端的处理
+                                elif result == "delete_unsuccess":
+                                    print("角色删除失败")
+                            elif req == "5":
+                                print("返回登录")
+                                client_socket.sendall("back2login$".encode("utf-8"))
+                                recv_buf = b""
+                                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                if result == "back_success":
+                                    login = False
+                                    break
+                            elif req == "quit":
+                                print("退出")
+                                recv_buf = b""
+                                quit_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
+                                if quit_success == "quit_success":
+                                    print("退出成功")
+                                    break
+                    except Exception as e:
+                        # 主要是用来处理短线异常，此时还未成功登录，所以不用担心数据保存，和下面不同
+                        print(f"未知异常: {type(e).__name__}: {e}")
+                        client_socket.close()
+                        return
                 elif result == "password_uncorrected":
                     print("密码错误")
                 elif result == "user_not_exists":
@@ -87,109 +209,9 @@ def main():
                 # 这个是由服务器抛出的自定义异常返回的字符串，所以不管是注册还是登录都需要处理
                 elif result == "ClientDisconnected":
                     print("连接意外断开")
-        recv_buf = b""
-        memory_management_is_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
-        if memory_management_is_success == "memory_management_unsuccess":
-            print("记忆管理失败，服务器端的是否请求和聊天记录的条数对不上")
-            client_socket.close() # 尽管服务器已经关闭了连接也还是再客户端这边关闭一次，规范代码书写
-            return
-
-        """**********************************************************************************************************"""
-        """从这里开始是登录成功之后可以执行的所有逻辑，都写入一个大的while循环"""
-        """整个部分的主要逻辑如下"""
-        """1.先判断用户要做什么操作（req）"""
-        """2.根据该操作向用户获取所需的信息，有一些发给服务器，有一些保存到客户端本地"""
-        """3.接收服务器反馈并做相应处理"""
-        """4.如果是连接断开就直接关闭客户端"""
-        while True:
-            print("请输入需要向服务器发送的请求：（chat：聊天、character：创建新角色、change_character：切换聊天角色、quit：退出）")
-            req=input()
-
-
-
-            if req == "1":
-                if input_mode == 1:
-                    text = input("请输入: ")   # 读取键盘输入
-                    if text == "":
-                        print("text为空")
-                        continue
-                elif input_mode == 2:
-                    print("正在努力倾听您的话：")
-                    text = voice2text.v2t(asr_model)
-                print(f"玉舟哥哥说：{text}")
-                # 发送文本，必须以 $ 结尾
-                client_socket.sendall("chat$".encode("utf-8"))
-                client_socket.sendall((text + "$").encode("utf-8"))
-                client_socket.sendall((home_status.to_prompt() + "$").encode("utf-8"))
-                # recv_buf必须定义在外层，不然会丢失信息
-                recv_buf = b""
-                reply,recv_buf = myTools.get_a_message(client_socket,recv_buf)
-                control_code_str,recv_buf = myTools.get_a_message(client_socket,recv_buf)
-                sentiment_label,recv_buf = myTools.get_a_message(client_socket,recv_buf) # 接收情感标签
-                sentiment_confidence,recv_buf = myTools.get_a_message(client_socket,recv_buf) # 接收情感标签可信度（这是一个浮点数，需要做类型转换）
-                print(f"由比滨结衣：{reply}")
-                print(f"控制代码：{control_code_str}")
-                print(f"情感标签：{sentiment_label}")
-                print(f"情感可信度{sentiment_confidence}")
-                if control_code_str!="":
-                    for ch in control_code_str:
-                        code = int(ch)
-                        actions.do_action(home_status, code)
-                    print(home_status.to_prompt())
-                # ---------- 调用语音生成 ----------
-                segments = myTools.split_by_chinese(reply, limit=12)
-                TTS.segments2voice(segments,"happiness",sentiment_confidence)
-
-
-                """目前，创建角色和切换角色都仅仅完成了服务器端的切换，客户端还需要开发对应的切换,例如：语音模型"""
-            elif req == "2":
-                print("请输入角色姓名：")
-                new_character_name = input()
-                print("请输入角色设定")
-                character_set = input()
-                client_socket.sendall("create_a_new_character$".encode("utf-8"))
-                client_socket.sendall((new_character_name + "$").encode("utf-8"))
-                client_socket.sendall((character_set + "$").encode("utf-8"))
-                recv_buf = b""
-                create_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
-                if create_success=="create_success":
-                    print(f"新角色{new_character_name}创建成功")
-                elif create_success=="create_unsuccess":
-                    print(f"新角色{new_character_name}创建失败")
-                elif create_success=="infor_error":
-                    print("角色信息错误")
-
-
-
-            elif req == "3":
-                print("请输入需要切换的角色名称：")
-                change_name = input()
-                client_socket.sendall("change_character$".encode("utf-8"))
-                client_socket.sendall((change_name + "$").encode("utf-8"))
-                recv_buf = b""
-                result, recv_buf = myTools.get_a_message(client_socket, recv_buf)
-                if result == "change_success":
-                    print("角色切换成功")
-                elif result == "change_unsuccess":
-                    print("角色切换失败")
-
-
-
-            elif req == "quit":
-                print("退出")
-                recv_buf = b""
-                quit_success, recv_buf = myTools.get_a_message(client_socket, recv_buf)
-                if quit_success=="quit_success":
-                    print("退出成功")
-
-
-
-    except ConnectionRefusedError:
-        print("[客户端] 连接被拒绝，请确认服务端已启动")
-    except KeyboardInterrupt:
-        print("\n[客户端] 手动中断")
-    except myTools.ClientDisconnected:
-        print("连接意外断开")
+    except Exception as e:
+        # 主要是用来处理短线异常，此时还未成功登录，所以不用担心数据保存，和下面不同
+        print(f"未知异常: {type(e).__name__}: {e}")
     finally:
         client_socket.close()
         print("[客户端] 已关闭")
